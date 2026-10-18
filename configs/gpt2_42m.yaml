@@ -1,0 +1,22 @@
+# 只实现 GPT-2；不包含任何 Llama 架构开关。
+model:
+  vocab_size: 32768  # 训练时按实际 tokenizer 大小对齐
+  block_size: 1024
+  n_layer: 8
+  n_head: 8
+  n_embd: 512
+  dropout: 0.0
+  attention_backend: manual  # 可换成 sdpa；仍然是同一个 GPT-2 架构
+
+train:
+  data_dir: data/tinystories
+  out_dir: out/gpt2
+  steps: 1000
+  batch_size: 2
+  grad_accum: 8
+  lr: 0.0003
+  weight_decay: 0.1
+  eval_every: 100
+  eval_batches: 10
+  seed: 1337
+  device: auto
