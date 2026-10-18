@@ -1,0 +1,11 @@
+# 只替换归一化；其他模型/训练字段使用 GPT-2 默认值。
+model:
+  vocab_size: 32768
+  block_size: 1024
+  n_layer: 8
+  n_head: 8
+  n_embd: 512
+  attention_backend: sdpa
+  norm_type: rmsnorm
+train:
+  out_dir: out/gpt2-rmsnorm

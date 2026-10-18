@@ -1,4 +1,4 @@
-# 只实现 GPT-2；不包含任何 Llama 架构开关。
+# GPT-2 参考基线；V1 的单组件消融与 Llama 风格组合使用独立配置。
 model:
   vocab_size: 32768  # 训练时按实际 tokenizer 大小对齐
   block_size: 1024

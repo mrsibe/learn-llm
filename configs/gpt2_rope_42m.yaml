@@ -1,0 +1,11 @@
+# 只替换位置编码：移除绝对位置表，对 Q/K 使用 RoPE。
+model:
+  vocab_size: 32768
+  block_size: 1024
+  n_layer: 8
+  n_head: 8
+  n_embd: 512
+  attention_backend: sdpa
+  position_type: rope
+train:
+  out_dir: out/gpt2-rope

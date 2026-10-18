@@ -1,0 +1,12 @@
+# 只替换 FFN；1360 为接近 8/3*512 的 16 对齐维度，尽量匹配 GELU 参数量。
+model:
+  vocab_size: 32768
+  block_size: 1024
+  n_layer: 8
+  n_head: 8
+  n_embd: 512
+  attention_backend: sdpa
+  mlp_type: swiglu
+  ffn_hidden_size: 1360
+train:
+  out_dir: out/gpt2-swiglu

@@ -1,0 +1,21 @@
+# Llama 风格组合，不是 Meta 官方配置或权重格式。
+# GQA 减少注意力参数后，FFN 用 1664，使总规模接近 GPT-2 的 42.52M。
+model:
+  vocab_size: 32768
+  block_size: 1024
+  n_layer: 8
+  n_head: 8
+  n_embd: 512
+  dropout: 0.0
+  attention_backend: sdpa
+  norm_type: rmsnorm
+  position_type: rope
+  mlp_type: swiglu
+  n_kv_heads: 2
+  ffn_hidden_size: 1664
+  norm_eps: 0.00001
+  rope_theta: 10000.0
+  bias: false
+  tie_embeddings: true
+train:
+  out_dir: out/llama

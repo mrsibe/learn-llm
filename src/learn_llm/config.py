@@ -1,5 +1,6 @@
-"""仅定义 GPT-2 和单卡训练配置，不预留其他架构的空接口。"""
+"""共享的 Decoder-only 模型与单卡训练配置；通过具体组件做架构消融。"""
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,6 +16,28 @@ class GPTConfig:
     n_embd: int = 512
     dropout: float = 0.0
     attention_backend: str = "manual"
+    norm_type: str = "layernorm"
+    position_type: str = "learned"
+    mlp_type: str = "gelu"
+    n_kv_heads: int | None = None  # None 使用 n_head，即 MHA；1 为 MQA
+    ffn_hidden_size: int | None = None
+    norm_eps: float = 1e-5
+    rope_theta: float = 10000.0
+    bias: bool = True
+    tie_embeddings: bool = True
+
+    @property
+    def kv_heads(self):
+        return self.n_head if self.n_kv_heads is None else self.n_kv_heads
+
+    @property
+    def ffn_size(self):
+        if self.ffn_hidden_size is not None:
+            return self.ffn_hidden_size
+        if self.mlp_type == "gelu":
+            return 4 * self.n_embd
+        # SwiGLU 有三组矩阵，使用约 8/3*d 而不是 4*d，并向上对齐到 64。
+        return math.ceil((8 * self.n_embd / 3) / 64) * 64
 
     def __post_init__(self):
         for name in ("vocab_size", "block_size", "n_layer", "n_head", "n_embd"):
@@ -27,6 +50,31 @@ class GPTConfig:
             raise ValueError("dropout 必须在 [0, 1) 范围内")
         if self.attention_backend not in ("manual", "sdpa"):
             raise ValueError("attention_backend 只能是 manual 或 sdpa")
+        for name, choices in (
+            ("norm_type", ("layernorm", "rmsnorm")),
+            ("position_type", ("learned", "rope")),
+            ("mlp_type", ("gelu", "swiglu")),
+        ):
+            if getattr(self, name) not in choices:
+                raise ValueError(f"{name} 必须是 {choices} 之一")
+        for name in ("n_kv_heads", "ffn_hidden_size"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError(f"{name} 必须为正整数或 null")
+        if self.n_head % self.kv_heads:
+            raise ValueError("n_head 必须能被 n_kv_heads 整除")
+        if self.position_type == "rope" and (self.n_embd // self.n_head) % 2:
+            raise ValueError("RoPE 要求 head_dim 为偶数")
+        for name in ("norm_eps", "rope_theta"):
+            value = getattr(self, name)
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"{name} 必须为有限正数")
+        if type(self.bias) is not bool or type(self.tie_embeddings) is not bool:
+            raise ValueError("bias 和 tie_embeddings 必须为布尔值")
 
 
 @dataclass

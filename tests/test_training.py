@@ -9,8 +9,22 @@ from learn_llm.generate import main as generate
 from learn_llm.train import train
 
 
-def test_train_resume_matches_uninterrupted(token_data, tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("llama_style", [False, True])
+def test_train_resume_matches_uninterrupted(
+    token_data, tmp_path, monkeypatch, capsys, llama_style
+):
     cfg = GPTConfig(block_size=8, n_layer=1, n_head=2, n_embd=16, dropout=0.1)
+    if llama_style:
+        cfg = replace(
+            cfg,
+            norm_type="rmsnorm",
+            position_type="rope",
+            mlp_type="swiglu",
+            n_kv_heads=1,
+            ffn_hidden_size=48,
+            bias=False,
+            attention_backend="sdpa",
+        )
     training = TrainConfig(
         data_dir=str(token_data),
         out_dir=str(tmp_path / "resumed"),

@@ -11,10 +11,21 @@ CUDA_BF16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
 pytestmark = pytest.mark.skipif(not CUDA_BF16, reason="需要支持 BF16 的 CUDA GPU")
 
 
-def test_cuda_bf16_training_and_resume(token_data, tmp_path):
+@pytest.mark.parametrize("llama_style", [False, True])
+def test_cuda_bf16_training_and_resume(token_data, tmp_path, llama_style):
     model = GPTConfig(
         block_size=16, n_layer=1, n_head=2, n_embd=32, attention_backend="sdpa"
     )
+    if llama_style:
+        model = replace(
+            model,
+            norm_type="rmsnorm",
+            position_type="rope",
+            mlp_type="swiglu",
+            n_kv_heads=1,
+            ffn_hidden_size=88,
+            bias=False,
+        )
     cfg = TrainConfig(
         data_dir=str(token_data),
         out_dir=str(tmp_path / "gpu"),
@@ -35,11 +46,22 @@ def test_cuda_bf16_training_and_resume(token_data, tmp_path):
     assert all(torch.isfinite(value).all() for value in checkpoint["model"].values())
 
 
-def test_cuda_fp32_bf16_manual_sdpa_numerics(monkeypatch):
+@pytest.mark.parametrize("llama_style", [False, True])
+def test_cuda_fp32_bf16_manual_sdpa_numerics(monkeypatch, llama_style):
     # 关闭 TF32，避免把 TF32/FP32 的差异混入 BF16 对照。
     monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     torch.manual_seed(12)
     cfg = GPTConfig(vocab_size=64, block_size=16, n_layer=2, n_head=2, n_embd=32)
+    if llama_style:
+        cfg = replace(
+            cfg,
+            norm_type="rmsnorm",
+            position_type="rope",
+            mlp_type="swiglu",
+            n_kv_heads=1,
+            ffn_hidden_size=88,
+            bias=False,
+        )
     reference = GPT(cfg)
     state = reference.state_dict()
     x = torch.randint(64, (2, 16), device="cuda")

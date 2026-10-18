@@ -1,69 +1,23 @@
+"""共享 Pre-Norm Decoder 骨架；配置决定 GPT-2 或 Llama 风格组件。"""
+
 import math
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+from .attention import CausalSelfAttention
 from .config import GPTConfig
-
-
-class CausalSelfAttention(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        assert cfg.n_embd % cfg.n_head == 0
-        self.n_head = cfg.n_head
-        self.head_dim = cfg.n_embd // cfg.n_head
-        self.backend = cfg.attention_backend
-        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd)  # QKV 合一
-        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd)
-        self.drop = nn.Dropout(cfg.dropout)
-        self.register_buffer(
-            "mask",
-            torch.tril(torch.ones(cfg.block_size, cfg.block_size, dtype=torch.bool)),
-            persistent=False,
-        )
-
-    def forward(self, x):
-        B, T, C = x.shape
-        q, k, v = self.qkv(x).split(C, dim=-1)
-        q, k, v = [
-            t.view(B, T, self.n_head, self.head_dim).transpose(1, 2) for t in (q, k, v)
-        ]
-        if self.backend == "sdpa":
-            # SDPA 不会自动根据 eval() 关闭 dropout，需要显式传入 0。
-            y = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=True,
-                dropout_p=self.drop.p if self.training else 0.0,
-            )
-        else:
-            att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-            att = att.masked_fill(~self.mask[:T, :T], float("-inf"))
-            y = self.drop(F.softmax(att, dim=-1)) @ v
-        y = y.transpose(1, 2).reshape(B, T, C)
-        return self.drop(self.proj(y))
-
-
-class MLP(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.fc = nn.Linear(cfg.n_embd, 4 * cfg.n_embd)
-        self.proj = nn.Linear(4 * cfg.n_embd, cfg.n_embd)
-        self.drop = nn.Dropout(cfg.dropout)
-
-    def forward(self, x):
-        return self.drop(self.proj(F.gelu(self.fc(x))))
+from .layers import GELUMLP, SwiGLU, build_norm
 
 
 class Block(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg: GPTConfig):
         super().__init__()
-        self.ln1 = nn.LayerNorm(cfg.n_embd)
+        self.ln1 = build_norm(cfg)
         self.attn = CausalSelfAttention(cfg)
-        self.ln2 = nn.LayerNorm(cfg.n_embd)
-        self.mlp = MLP(cfg)
+        self.ln2 = build_norm(cfg)
+        self.mlp = GELUMLP(cfg) if cfg.mlp_type == "gelu" else SwiGLU(cfg)
 
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
@@ -75,16 +29,20 @@ class GPT(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.wte = nn.Embedding(cfg.vocab_size, cfg.n_embd)
-        self.wpe = nn.Embedding(cfg.block_size, cfg.n_embd)
+        self.wpe = (
+            nn.Embedding(cfg.block_size, cfg.n_embd)
+            if cfg.position_type == "learned"
+            else None
+        )
         self.drop = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
-        self.ln_f = nn.LayerNorm(cfg.n_embd)
+        self.ln_f = build_norm(cfg)
         self.lm_head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
-        self.lm_head.weight = self.wte.weight  # 权重绑定
+        if cfg.tie_embeddings:
+            self.lm_head.weight = self.wte.weight
 
         self.apply(self._init_weights)
-        # GPT-2 初始化：残差分支的输出投影再按 1/sqrt(2*n_layer) 缩放，
-        # 避免残差流方差随深度累积。只命中 attn.proj.weight / mlp.proj.weight。
+        # 所有残差分支输出投影（包括 SwiGLU）都按深度缩放初始化。
         for name, p in self.named_parameters():
             if name.endswith("proj.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * cfg.n_layer))
@@ -103,8 +61,11 @@ class GPT(nn.Module):
             raise ValueError(
                 f"序列长度必须在 1..{self.cfg.block_size} 之间，实际为 {T}"
             )
-        pos = torch.arange(T, device=idx.device)
-        x = self.drop(self.wte(idx) + self.wpe(pos))
+        x = self.wte(idx)
+        if self.wpe is not None:
+            pos = torch.arange(T, device=idx.device)
+            x = x + self.wpe(pos)
+        x = self.drop(x)
         for block in self.blocks:
             x = block(x)
         x = self.ln_f(x)

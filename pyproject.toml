@@ -1,7 +1,7 @@
 [project]
 name = "learn-llm"
 version = "0.1.0"
-description = "A handwritten GPT-2 baseline for learning AI infrastructure"
+description = "Handwritten GPT-2 and Llama-style models for learning AI infrastructure"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
