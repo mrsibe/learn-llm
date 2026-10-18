@@ -13,6 +13,7 @@ import torch
 from .config import GPTConfig, TrainConfig, load_config
 from .metadata import environment_info
 from .model import GPT
+from .optim import Precision, build_optimizer, build_scheduler, optimizer_step
 
 MODES = ("forward", "forward_backward", "train_step")
 
@@ -24,7 +25,7 @@ def benchmark(
     mode="train_step",
     warmup=5,
     steps=20,
-    dtype="auto",
+    dtype=None,
     loss_readback="per-step",
 ):
     if mode not in MODES or warmup < 1 or steps < 1:
@@ -34,28 +35,16 @@ def benchmark(
     device = cfg.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
-    if dtype == "auto":
-        dtype = "bf16" if bf16 else "fp32"
-    if dtype not in ("fp32", "bf16") or (dtype == "bf16" and not bf16):
-        raise ValueError("仅支持 fp32 或支持 CUDA BF16 的设备")
+    precision = Precision(device, dtype or cfg.dtype)
+    dtype = precision.name
     torch.manual_seed(cfg.seed)
     if device == "cuda":
         torch.cuda.empty_cache()
     model = GPT(model_cfg).to(device)
     model.train(mode != "forward")
-    groups = [
-        {
-            "params": [p for p in model.parameters() if p.ndim >= 2],
-            "weight_decay": cfg.weight_decay,
-        },
-        {"params": [p for p in model.parameters() if p.ndim < 2], "weight_decay": 0.0},
-    ]
-    optimizer = (
-        torch.optim.AdamW(groups, lr=cfg.lr, betas=(0.9, 0.95))
-        if mode == "train_step"
-        else None
-    )
+    optimizer = build_optimizer(model, cfg) if mode == "train_step" else None
+    scheduler = build_scheduler(optimizer, cfg) if optimizer is not None else None
+    optimizer_updates = 0
     accum = cfg.grad_accum if mode == "train_step" else 1
     # 整个测量复用同一组 GPU 输入，不将随机数生成/主机拷贝计入吞吐。
     inputs = [
@@ -72,6 +61,7 @@ def benchmark(
             torch.cuda.synchronize()
 
     def iteration(measure):
+        nonlocal optimizer_updates
         events = []
         phases = {"forward_ms": 0.0, "backward_ms": 0.0}
 
@@ -104,11 +94,7 @@ def benchmark(
             def forward(tokens=tokens):
                 with (
                     torch.set_grad_enabled(mode != "forward"),
-                    torch.autocast(
-                        device_type=device,
-                        dtype=torch.bfloat16,
-                        enabled=dtype == "bf16",
-                    ),
+                    precision.autocast(),
                 ):
                     # targets 非空才计算全部位置；避免把仅生成最后一个 logit 的路径当训练前向。
                     return model(tokens[:, :-1], tokens[:, 1:])[1]
@@ -118,7 +104,10 @@ def benchmark(
             if loss_readback == "per-microbatch" and not torch.isfinite(loss):
                 raise RuntimeError("Non-finite benchmark loss")
             if mode != "forward":
-                phase("backward_ms", lambda loss=loss: (loss / accum).backward())
+                phase(
+                    "backward_ms",
+                    lambda loss=loss: precision.scaler.scale(loss / accum).backward(),
+                )
             if loss_readback == "per-microbatch":
                 loss_sum += loss.detach().item() / accum
             else:
@@ -127,10 +116,10 @@ def benchmark(
         if not math.isfinite(value):
             raise RuntimeError("Non-finite benchmark loss")
         if optimizer is not None:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(), 1.0, error_if_nonfinite=True
-            )
-            optimizer.step()
+            updated, _ = optimizer_step(model, optimizer, precision, cfg.grad_clip)
+            if updated:
+                optimizer_updates += 1
+                scheduler.step()
         sync()
         elapsed = (time.perf_counter() - start) * 1000
         for name, begin, end in events:
@@ -140,6 +129,7 @@ def benchmark(
     for _ in range(warmup):
         iteration(False)
     sync()
+    optimizer_updates = 0
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
     samples = [iteration(True) for _ in range(steps)]
@@ -156,6 +146,7 @@ def benchmark(
         "steps": steps,
         "effective_grad_accum": accum,
         "parameters": sum(p.numel() for p in model.parameters()),
+        "optimizer_updates": optimizer_updates,
         "tokens_per_iteration": tokens_per_iteration,
         "tokens_per_s": tokens_per_iteration * 1000 / statistics.mean(times),
         "step_ms_mean": statistics.mean(times),
@@ -178,7 +169,7 @@ def main():
     parser.add_argument("--mode", choices=(*MODES, "all"), default="all")
     parser.add_argument("--backend", choices=("manual", "sdpa", "both"))
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"))
-    parser.add_argument("--dtype", choices=("auto", "fp32", "bf16"), default="auto")
+    parser.add_argument("--dtype", choices=("auto", "fp32", "bf16", "fp16"))
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--grad-accum", type=int)
     parser.add_argument("--seq-len", type=int)

@@ -90,16 +90,51 @@ class TrainConfig:
     eval_batches: int = 10
     seed: int = 1337
     device: str = "auto"
+    dtype: str = "auto"  # auto: CUDA BF16 优先，否则 CUDA FP16 / CPU FP32
+    beta1: float = 0.9
+    beta2: float = 0.95
+    grad_clip: float = 1.0
+    scheduler: str = "constant"
+    warmup_steps: int = 0
+    decay_steps: int = 25000  # 独立于 steps，续训延长 steps 不会改变已有 LR 计划
+    min_lr: float = 3e-5
+    eval_seed: int = 42
+    save_every: int = 100
+    profile_steps: int = 0  # 0 关闭，否则先 warmup 1 步再记录 N 步
 
     def __post_init__(self):
-        for name in ("steps", "batch_size", "grad_accum", "eval_every", "eval_batches"):
+        for name in (
+            "steps",
+            "batch_size",
+            "grad_accum",
+            "eval_every",
+            "eval_batches",
+            "save_every",
+            "decay_steps",
+        ):
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} 必须为正整数")
-        if self.lr <= 0 or self.weight_decay < 0:
-            raise ValueError("lr 必须 > 0，weight_decay 必须 >= 0")
+        for name in ("warmup_steps", "profile_steps", "seed", "eval_seed"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} 必须为非负整数")
+        for name in ("lr", "weight_decay", "grad_clip", "min_lr", "beta1", "beta2"):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} 必须为有限非负数")
+        if self.lr == 0 or not (self.beta1 < 1 and self.beta2 < 1):
+            raise ValueError("lr 必须 > 0，AdamW betas 必须在 [0, 1) 内")
         if self.device not in ("auto", "cpu", "cuda"):
             raise ValueError("device 只能是 auto、cpu 或 cuda")
+        if self.dtype not in ("auto", "fp32", "bf16", "fp16"):
+            raise ValueError("dtype 只能是 auto、fp32、bf16 或 fp16")
+        if self.scheduler not in ("constant", "cosine"):
+            raise ValueError("scheduler 只能是 constant 或 cosine")
+        if self.scheduler == "cosine" and (
+            self.min_lr > self.lr or self.warmup_steps >= self.decay_steps
+        ):
+            raise ValueError("cosine 要求 min_lr <= lr 且 warmup_steps < decay_steps")
 
 
 @dataclass

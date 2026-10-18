@@ -1,0 +1,39 @@
+# 与 GPT-2 FineWeb-Edu 使用同一 tokenizer、token 数据和训练预算。
+model:
+  vocab_size: 32768
+  block_size: 1024
+  n_layer: 8
+  n_head: 8
+  n_embd: 512
+  dropout: 0.0
+  attention_backend: sdpa
+  norm_type: rmsnorm
+  position_type: rope
+  mlp_type: swiglu
+  n_kv_heads: 2
+  ffn_hidden_size: 1664
+  norm_eps: 0.00001
+  rope_theta: 10000.0
+  bias: false
+  tie_embeddings: true
+train:
+  data_dir: data/fineweb-edu
+  out_dir: out/llama-fineweb-edu
+  steps: 25000
+  batch_size: 2
+  grad_accum: 8
+  dtype: auto
+  lr: 0.0003
+  min_lr: 0.00003
+  scheduler: cosine
+  warmup_steps: 500
+  decay_steps: 25000
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  grad_clip: 1.0
+  eval_every: 500
+  eval_batches: 50
+  eval_seed: 42
+  save_every: 500
+  seed: 1337

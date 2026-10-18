@@ -13,8 +13,10 @@ EOT = "<|endoftext|>"
 DTYPE = "<u2"  # 小端 uint16；支持最多 65536 个 token
 
 
-def write_tokens(texts, tokenizer: Tokenizer, path: Path):
+def write_tokens(texts, tokenizer: Tokenizer, path: Path, max_tokens=0):
     """文档末尾加 EOT，再连续拼接；不 padding，允许跨文档窗口。"""
+    if type(max_tokens) is not int or max_tokens < 0:
+        raise ValueError("max_tokens 必须为非负整数")
     eot = tokenizer.token_to_id(EOT)
     if eot is None or tokenizer.get_vocab_size() > 65536:
         raise ValueError("tokenizer 必须包含 EOT，且词表不能超过 uint16 上限")
@@ -27,10 +29,14 @@ def write_tokens(texts, tokenizer: Tokenizer, path: Path):
             for encoding in tokenizer.encode_batch(batch, add_special_tokens=False):
                 ids.extend(encoding.ids)
                 ids.append(eot)
+            if max_tokens:
+                ids = ids[: max_tokens - total]
             block = np.asarray(ids, dtype=DTYPE).tobytes()
             f.write(block)
             digest.update(block)
             total += len(ids)
+            if max_tokens and total >= max_tokens:
+                break
     return total, digest.hexdigest()
 
 
@@ -69,7 +75,15 @@ class TokenData:
         starts = torch.randint(
             len(tokens) - self.block_size, (batch_size,), generator=generator
         )
-        # 多取一个 token，输入/目标错开一位。
+        return self.batch_at(split, starts, device)
+
+    def batch_at(self, split, starts, device):
+        # 固定验证集合与随机训练窗口复用同一个 packing 语义。
+        tokens = self.splits[split]
         windows = np.stack([tokens[i : i + self.block_size + 1] for i in starts])
-        windows = torch.from_numpy(windows.astype(np.int64)).to(device)
+        windows = torch.from_numpy(windows.astype(np.int64))
+        if device == "cuda":
+            windows = windows.pin_memory().to(device, non_blocking=True)
+        else:
+            windows = windows.to(device)
         return windows[:, :-1], windows[:, 1:]

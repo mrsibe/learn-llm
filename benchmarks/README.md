@@ -30,12 +30,12 @@ uv run benchmark --mode train_step --backend sdpa --batch-size 1 --grad-accum 8 
 - 每种后端按 micro → step → step → micro 顺序测量；每次重新初始化模型/优化器与种子，
   warmup 3 步，采样 8 步。表格以同类两轮的平均 step ms 换算 tokens/s。
 
-| Backend | Loss 读回 | Step ms | Tokens/s | Peak allocated GiB |
-| --- | --- | ---: | ---: | ---: |
-| Manual | 每 micro-batch | 363.35 | 22546 | 1.589 |
-| Manual | 每优化步 | 354.96 | 23079 | 1.589 |
-| SDPA | 每 micro-batch | 210.76 | 38869 | 1.200 |
-| SDPA | 每优化步 | 190.67 | 42965 | 1.200 |
+| Backend | Loss 读回      | Step ms | Tokens/s | Peak allocated GiB |
+| ------- | -------------- | ------: | -------: | -----------------: |
+| Manual  | 每 micro-batch |  363.35 |    22546 |              1.589 |
+| Manual  | 每优化步       |  354.96 |    23079 |              1.589 |
+| SDPA    | 每 micro-batch |  210.76 |    38869 |              1.200 |
+| SDPA    | 每优化步       |  190.67 |    42965 |              1.200 |
 
 这些是短测观察，不是稳定的加速承诺。Manual 两种方式各轮耗时区间重叠，
 SDPA 的 per-step 在这两轮里更快；不足以据此认定标量同步是最大瓶颈。
@@ -44,11 +44,11 @@ SDPA 的 per-step 在这两轮里更快；不足以据此认定标量同步是�
 
 同机三场景检查（SDPA，batch=1，BF16，warmup=2，采样=5；完整步累积=2）：
 
-| 场景 | 每轮 tokens | Wall ms | Tokens/s |
-| --- | ---: | ---: | ---: |
-| 全序列 forward + loss（无梯度） | 1024 | 8.46 | 121089 |
-| Forward + backward | 1024 | 24.57 | 41675 |
-| 完整训练步 | 2048 | 64.58 | 31711 |
+| 场景                            | 每轮 tokens | Wall ms | Tokens/s |
+| ------------------------------- | ----------: | ------: | -------: |
+| 全序列 forward + loss（无梯度） |        1024 |    8.46 |   121089 |
+| Forward + backward              |        1024 |   24.57 |    41675 |
+| 完整训练步                      |        2048 |   64.58 |    31711 |
 
 不同场景的工作量不同，不要直接用表格推算训练/推理加速倍数。
 原始本机 JSON 位于被 Git 忽略的 `benchmarks/results/`，记录实际模型、配置、

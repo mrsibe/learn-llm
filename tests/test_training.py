@@ -10,8 +10,9 @@ from learn_llm.train import train
 
 
 @pytest.mark.parametrize("llama_style", [False, True])
+@pytest.mark.parametrize("schedule", ["constant", "cosine"])
 def test_train_resume_matches_uninterrupted(
-    token_data, tmp_path, monkeypatch, capsys, llama_style
+    token_data, tmp_path, monkeypatch, capsys, llama_style, schedule
 ):
     cfg = GPTConfig(block_size=8, n_layer=1, n_head=2, n_embd=16, dropout=0.1)
     if llama_style:
@@ -34,6 +35,9 @@ def test_train_resume_matches_uninterrupted(
         eval_every=1,
         eval_batches=1,
         device="cpu",
+        scheduler=schedule,
+        warmup_steps=1 if schedule == "cosine" else 0,
+        decay_steps=8,
     )
     train(cfg, training)
     train(cfg, replace(training, steps=3), resume=True)
@@ -53,6 +57,14 @@ def test_train_resume_matches_uninterrupted(
                 value, straight["optimizer"]["state"][key][name], rtol=0, atol=0
             )
     torch.testing.assert_close(resumed["rng"], straight["rng"], rtol=0, atol=0)
+    assert resumed["scheduler"] == straight["scheduler"]
+    assert resumed["scaler"] == straight["scaler"]
+    assert resumed["python_rng"] == straight["python_rng"]
+    assert resumed["numpy_rng"] == straight["numpy_rng"]
+    torch.testing.assert_close(
+        resumed["validation_starts"], straight["validation_starts"], rtol=0, atol=0
+    )
+    assert resumed["best_step"] == straight["best_step"]
     assert resumed["environment"]["packages"]["torch"]
     assert (tmp_path / "resumed/metadata.json").exists()
     assert list((tmp_path / "resumed/events").iterdir())

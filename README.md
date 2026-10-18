@@ -1,49 +1,48 @@
 # learn-llm
 
-从手写 GPT-2 出发，学习模型架构与 AI Infra。当前支持 GPT-2 和 Llama 风格的
-RMSNorm、RoPE、SwiGLU、GQA，可通过 YAML 做单组件消融。
+手写 GPT-2 → Llama 风格模型，学习 AI Infra。模型、训练循环和采样自己实现，
+底层复用 PyTorch 与 Hugging Face Datasets/Tokenizers，不使用 Transformers Trainer。
 
-模型、训练循环和采样自己实现；底层复用 PyTorch、Hugging Face Datasets/Tokenizers。
-不使用 Transformers Trainer，暂不实现 KV Cache、分布式或自定义 CUDA Kernel。
+当前 V2 支持架构消融、AMP、固定计划的 Warmup/Cosine、latest/best 断点恢复、
+固定验证窗口、FineWeb-Edu 数据准备和 PyTorch Profiler。暂不实现 KV Cache、分布式或自定义 CUDA Kernel。
 
 ## 使用
 
 ```bash
 uv sync
 
-# 少量数据调试：训练 BPE 并生成 train.bin / val.bin
+# 少量数据调试
 uv run python scripts/prepare_data.py --streaming --out data/debug --max-docs 2000
 uv run train --data data/debug --out out/debug --steps 10 --verify-data
-uv run generate --ckpt out/debug/ckpt.pt --prompt "Once upon a time"
+uv run generate --ckpt out/debug/best.pt --prompt "Once upon a time"
 
-# 正式准备 TinyStories，使用默认 GPT-2 配置
+# TinyStories 正式配置：先 1K，再 5K，最后按原计划训练到 25K
 uv run python scripts/prepare_data.py
-uv run train --config configs/gpt2_42m.yaml
-uv run train --resume --steps 2000
+uv run train --config configs/gpt2_42m_tinystories.yaml --steps 1000
+uv run train --config configs/gpt2_42m_tinystories.yaml --resume --steps 5000
+uv run train --config configs/gpt2_42m_tinystories.yaml --resume
+uv run evaluate --ckpt out/gpt2-tinystories/best.pt --verify-data
 
-# Llama 风格组合：同样从随机初始化训练
-uv run train --config configs/llama_42m.yaml
-uv run generate --ckpt out/llama/ckpt.pt
-
+# Llama 风格组合使用同一数据和训练预算
+uv run train --config configs/llama_42m_tinystories.yaml
 uv run benchmark --config configs/llama_42m.yaml --mode all --backend both
 uv run tensorboard --logdir out
 uv run pytest -q
 uv run ruff check src scripts tests
 ```
 
-数据准备输出目录必须不存在；`--verify-data` 可选，启动时核验 token 文件 SHA256。
-`--steps` 是总优化步数，续训需使用相同架构配置和优化超参。
+默认 `uv run train` 仍为 1000 步调试配置，不会自动开始正式长训。
+数据准备目录必须不存在；`--steps` 为累计训练步数，不会改变 `decay_steps`。
+显存不足时首次运行可用 `--batch-size 1 --grad-accum 16`，保持每步 token 数。
+`--profile-steps N` 先 warmup 一步，再记录 N 步，trace 写到输出目录的 `profile/`。
 
-## 结构
+## 代码
 
-- `configs/`：GPT-2 基线、单组件消融和约 42M 的 Llama 风格组合。
-- `src/learn_llm/model.py`：共享的 Decoder 骨架。
-- `attention.py` / `layers.py`：MHA/GQA、归一化、RoPE、FFN。
-- `data.py` / `train.py` / `generate.py`：数据、训练、生成。
-- `benchmark.py`：独立吞吐、耗时和显存测量。
-- `scripts/prepare_data.py`：TinyStories 数据准备。
-- `tests/`：CPU/CUDA 正确性与训练检查。
+- `model.py` / `attention.py` / `layers.py`：共享 Decoder 与架构组件。
+- `train.py` / `optim.py` / `checkpoint.py` / `evaluate.py`：训练生命周期。
+- `data.py` / `scripts/prepare_data.py`：分词、token 缓存和批处理。
+- `generate.py` / `benchmark.py`：生成与独立性能测量。
+- `configs/` / `tests/`：实验配置与 CPU/CUDA 检查。
 
-架构参数与实验说明见 [docs/experiments.md](docs/experiments.md)，
-Benchmark 边界见 [benchmarks/README.md](benchmarks/README.md)。
-这些是学习用模型，不提供 OpenAI/Meta 官方权重导入或旧版本权重迁移；尚未完成正式预训练。
+详见 [V2 训练指南](docs/training.md)、[V1 架构实验](docs/experiments.md)、
+[Benchmark 边界](benchmarks/README.md)。尚未完成正式预训练，不提供官方权重导入或旧版本权重迁移。

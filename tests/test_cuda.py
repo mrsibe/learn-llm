@@ -5,6 +5,7 @@ import torch
 
 from learn_llm.config import GPTConfig, TrainConfig
 from learn_llm.model import GPT
+from learn_llm.optim import Precision, build_optimizer, build_scheduler, optimizer_step
 from learn_llm.train import train
 
 CUDA_BF16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -87,3 +88,62 @@ def test_cuda_fp32_bf16_manual_sdpa_numerics(monkeypatch, llama_style):
         else:
             torch.testing.assert_close(logits, ref_logits, rtol=1e-4, atol=1e-6)
             torch.testing.assert_close(grads, ref_grads, rtol=1e-4, atol=1e-6)
+
+
+def test_fp16_scaler_overflow_skips_optimizer_and_scheduler():
+    model = torch.nn.Linear(4, 4).cuda()
+    cfg = TrainConfig(scheduler="cosine", warmup_steps=2, decay_steps=8)
+    precision = Precision("cuda", "fp16")
+    optimizer = build_optimizer(model, cfg)
+    scheduler = build_scheduler(optimizer, cfg)
+    x = torch.randn(2, 4, device="cuda")
+    with precision.autocast():
+        loss = model(x).square().mean()
+    precision.scaler.scale(loss).backward()
+    original = [p.detach().clone() for p in model.parameters()]
+    for p in model.parameters():
+        p.grad.fill_(float("inf"))
+    scale = precision.scaler.get_scale()
+    updated, norm = optimizer_step(model, optimizer, precision, cfg.grad_clip)
+    if updated:
+        scheduler.step()
+    assert not updated and not torch.isfinite(torch.tensor(norm))
+    assert precision.scaler.get_scale() < scale
+    assert scheduler.last_epoch == 0
+    for p, expected in zip(model.parameters(), original):
+        torch.testing.assert_close(p, expected, rtol=0, atol=0)
+    optimizer.zero_grad(set_to_none=True)
+    with precision.autocast():
+        loss = model(x).square().mean()
+    precision.scaler.scale(loss).backward()
+    updated, _ = optimizer_step(model, optimizer, precision, cfg.grad_clip)
+    if updated:
+        scheduler.step()
+    assert updated and scheduler.last_epoch == 1
+
+
+def test_cuda_fp16_training_resume(token_data, tmp_path):
+    model = GPTConfig(
+        block_size=16, n_layer=1, n_head=2, n_embd=32, attention_backend="sdpa"
+    )
+    cfg = TrainConfig(
+        data_dir=str(token_data),
+        out_dir=str(tmp_path / "fp16"),
+        steps=1,
+        batch_size=2,
+        grad_accum=2,
+        eval_every=1,
+        eval_batches=1,
+        device="cuda",
+        dtype="fp16",
+        scheduler="cosine",
+        warmup_steps=1,
+        decay_steps=8,
+    )
+    train(model, cfg)
+    train(model, replace(cfg, steps=2), resume=True)
+    checkpoint = torch.load(tmp_path / "fp16/ckpt.pt", weights_only=True)
+    assert checkpoint["step"] == 2
+    assert checkpoint["precision"] == "fp16" and checkpoint["scaler"]
+    assert checkpoint["scheduler"]["last_epoch"] == checkpoint["optimizer_updates"]
+    assert all(torch.isfinite(value).all() for value in checkpoint["model"].values())
