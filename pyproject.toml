@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 train = "learn_llm.train:main"
 generate = "learn_llm.generate:main"
+benchmark = "learn_llm.benchmark:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

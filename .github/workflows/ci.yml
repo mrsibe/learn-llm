@@ -1,0 +1,36 @@
+name: CPU checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.13"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies with CPU PyTorch
+        run: |
+          uv venv
+          # Keep the locked Python dependencies, but avoid downloading CUDA libraries on CPU CI.
+          uv export --frozen --prune torch --no-hashes --no-emit-project --output-file "$RUNNER_TEMP/requirements.txt"
+          uv pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --requirements "$RUNNER_TEMP/requirements.txt"
+          uv pip install --no-deps --editable .
+      - name: Lint and format
+        run: |
+          uv run --no-sync ruff check src scripts tests
+          uv run --no-sync ruff format --check src scripts tests
+      - name: CPU tests (no remote dataset downloads)
+        run: uv run --no-sync pytest -q

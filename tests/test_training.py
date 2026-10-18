@@ -32,6 +32,15 @@ def test_train_resume_matches_uninterrupted(token_data, tmp_path, monkeypatch, c
         torch.testing.assert_close(
             resumed["model"][name], straight["model"][name], rtol=0, atol=0
         )
+    assert resumed["optimizer"]["param_groups"] == straight["optimizer"]["param_groups"]
+    for key, state in resumed["optimizer"]["state"].items():
+        for name, value in state.items():
+            torch.testing.assert_close(
+                value, straight["optimizer"]["state"][key][name], rtol=0, atol=0
+            )
+    torch.testing.assert_close(resumed["rng"], straight["rng"], rtol=0, atol=0)
+    assert resumed["environment"]["packages"]["torch"]
+    assert (tmp_path / "resumed/metadata.json").exists()
     assert list((tmp_path / "resumed/events").iterdir())
     with pytest.raises(ValueError, match="grad_accum"):
         train(cfg, replace(training, steps=4, grad_accum=1), resume=True)

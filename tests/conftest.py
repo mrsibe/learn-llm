@@ -23,7 +23,7 @@ def token_data(tmp_path, monkeypatch):
     splits = {
         name: Dataset.from_dict({"text": texts}) for name in ("train", "validation")
     }
-    monkeypatch.setattr(prepare_data, "load_dataset", lambda repo: splits)
+    monkeypatch.setattr(prepare_data, "load_dataset", lambda repo, **kwargs: splits)
     out = tmp_path / "data"
     prepare_data.prepare_data(out, vocab_size=300, tokenizer_docs=8, max_docs=8)
     return out

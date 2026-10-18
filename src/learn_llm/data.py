@@ -35,7 +35,7 @@ def write_tokens(texts, tokenizer: Tokenizer, path: Path):
 
 
 class TokenData:
-    def __init__(self, directory: str | Path, block_size: int):
+    def __init__(self, directory: str | Path, block_size: int, verify=False):
         directory = Path(directory)
         self.meta = json.loads((directory / "meta.json").read_text())
         self.tokenizer_json = (directory / "tokenizer.json").read_text()
@@ -54,6 +54,14 @@ class TokenData:
                 )
             if size // 2 != self.meta[f"{split}_tokens"]:
                 raise ValueError(f"{path} 的 token 数与 meta.json 不一致")
+            if verify:
+                expected = self.meta.get(f"{split}_sha256")
+                if expected is None:
+                    raise ValueError(f"meta.json 缺少 {split}_sha256，请重新准备数据")
+                with path.open("rb") as f:
+                    actual = hashlib.file_digest(f, "sha256").hexdigest()
+                if actual != expected:
+                    raise ValueError(f"{path} SHA256 不一致，数据可能已损坏")
             self.splits[split] = np.memmap(path, mode="r", dtype=DTYPE)
 
     def batch(self, split: str, batch_size: int, device: str, generator=None):
